@@ -50,7 +50,20 @@ class AI_Gym_Trainer:
         self.current_rep_valid = True
         self.rep_form_issues = []
         self.consecutive_bad_reps = 0
+        self.consecutive_good_reps = 0
         self.last_corrective_feedback_time = 0
+        # Debounce counters for beginner-friendly form detection
+        self.elbow_drift_frames = 0
+        self.shrug_frames = 0
+        self.lean_frames = 0
+        self.error_frame_threshold = 8  # require sustained frames before flagging
+        # Squat + lift debounce counters
+        self.knee_inward_frames = 0
+        self.lean_forward_frames = 0
+        self.lift_too_high_frames = 0
+        self.lift_shrug_frames = 0
+        # Encouragement tracking
+        self.consecutive_good_reps = 0
         
         # Pacing variables for "One... Two... Three..."
         self.pacing_state = 0 
@@ -124,6 +137,17 @@ class AI_Gym_Trainer:
             return count >= 3
         except: return False
 
+    def check_full_body_visibility(self, landmarks):
+        """Require all key landmarks visible (stricter) before counting reps"""
+        try:
+            required = [11, 12, 23, 24]
+            for idx in required:
+                if landmarks[idx].visibility <= 0.6:
+                    return False
+            return True
+        except:
+            return False
+
     def reset_counter(self):
         self.counter = 0
         self.stage = None
@@ -156,27 +180,27 @@ class AI_Gym_Trainer:
         """Enhanced status box with real-time feedback (Original Layout)"""
         h, w = image.shape[:2]
         
-        # Main status box
+        # Main status box (smaller)
         box_color = (0, 255, 0) if self.body_visible else (0, 0, 255)
-        cv2.rectangle(image, (0, 0), (600, 130), (30, 30, 30), -1)
-        cv2.rectangle(image, (0, 0), (600, 130), box_color, 3)
+        cv2.rectangle(image, (0, 0), (480, 110), (30, 30, 30), -1)
+        cv2.rectangle(image, (0, 0), (480, 110), box_color, 2)
         
         # REPS section (only valid reps)
-        cv2.putText(image, 'VALID REPS', (20, 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(image, 'VALID REPS', (14, 26), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         cv2.putText(image, str(self.counter), 
-                    (20, 85), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 2.5, (0, 255, 0), 3, cv2.LINE_AA)
+                (14, 70), 
+                cv2.FONT_HERSHEY_SIMPLEX, 1.8, (0, 255, 0), 2, cv2.LINE_AA)
         
         # Bad reps counter
         if self.consecutive_bad_reps > 0:
             cv2.putText(image, f'Bad: {self.consecutive_bad_reps}', 
-                        (20, 115), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 100, 255), 2, cv2.LINE_AA)
+                        (14, 95), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 100, 255), 1, cv2.LINE_AA)
         
         # STAGE section
-        cv2.putText(image, 'STAGE', (180, 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(image, 'STAGE', (160, 26), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         
         if self.current_exercise == "curl" and not self.ready_position_confirmed:
             stage_text = "READY?"
@@ -186,8 +210,8 @@ class AI_Gym_Trainer:
             stage_text = str(self.stage).upper() if self.stage else "START"
         
         cv2.putText(image, stage_text, 
-                    (180, 85), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.5, stage_color, 3, cv2.LINE_AA)
+                (160, 70), 
+                cv2.FONT_HERSHEY_SIMPLEX, 1.2, stage_color, 2, cv2.LINE_AA)
         
         # Form indicator
         if self.current_rep_valid:
@@ -198,19 +222,19 @@ class AI_Gym_Trainer:
             form_color = (0, 0, 255)
         
         cv2.putText(image, form_text, 
-                    (180, 115), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, form_color, 2, cv2.LINE_AA)
+                (160, 95), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, form_color, 1, cv2.LINE_AA)
         
         # EXERCISE section
-        cv2.putText(image, 'EXERCISE', (380, 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(image, 'EXERCISE', (320, 26), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         display_text = f"{self.current_exercise.upper()} ({self.side[0].upper()})"
         cv2.putText(image, display_text, 
-                    (380, 70), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (100, 200, 255), 2, cv2.LINE_AA)
+                (320, 56), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (100, 200, 255), 1, cv2.LINE_AA)
         cv2.putText(image, f"Arm:{int(angle)}° Body:{int(body_angle)}°", 
-                    (380, 100), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+                (320, 82), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
         
         # Angle visualization on joint
         if self.body_visible and angle > 0:
@@ -218,20 +242,20 @@ class AI_Gym_Trainer:
                 joint_pos = tuple(np.multiply(landmarks_coords, [w, h]).astype(int))
                 
                 # Draw large circle around joint
-                cv2.circle(image, joint_pos, 15, (0, 255, 255), 3)
-                cv2.circle(image, joint_pos, 10, (0, 255, 255), -1)
+                cv2.circle(image, joint_pos, 10, (0, 255, 255), 2)
+                cv2.circle(image, joint_pos, 6, (0, 255, 255), -1)
                 
                 # Draw angle text
                 angle_text = f"{int(angle)}"
                 cv2.putText(image, angle_text, 
-                            (joint_pos[0] + 25, joint_pos[1] + 10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 3, cv2.LINE_AA)
+                            (joint_pos[0] + 18, joint_pos[1] + 6), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2, cv2.LINE_AA)
             except Exception as e:
                 pass
         
         # Feedback text box at bottom
         if feedback_text:
-            feedback_height = 80
+            feedback_height = 60
             if "✓" in feedback_text or "GOOD" in feedback_text or "PERFECT" in feedback_text:
                 bg_color = (0, 150, 0)
             elif "✗" in feedback_text or "BAD" in feedback_text or "WRONG" in feedback_text or "⚠" in feedback_text:
@@ -243,9 +267,9 @@ class AI_Gym_Trainer:
             cv2.rectangle(image, (0, h - feedback_height), (w, h), (255, 255, 255), 3)
             
             lines = feedback_text.split('\n')
-            font_scale = 0.7
-            thickness = 2
-            line_height = 25
+            font_scale = 0.6
+            thickness = 1
+            line_height = 20
             
             for i, line in enumerate(lines[:2]):
                 text_size = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
@@ -275,80 +299,107 @@ class AI_Gym_Trainer:
         feedback_text = ""
         body_angle = 0 # Dummy for UI
 
-        # 2. Ready Position Check
+        # 2. Ready Position Check (require full visibility before starting)
         if not self.ready_position_confirmed:
-            if angle > 150:
+            if angle > 150 and self.check_full_body_visibility(landmarks):
                 self.ready_position_check_frames += 1
                 if self.ready_position_check_frames > 15:
                     self.ready_position_confirmed = True
-                    self.speak_async("Begin. One...", priority=True)
+                    self.speak_async("Begin. Start the curl.", priority=True)
                     self.stage = "up"
                     self.pacing_state = 1
             else:
-                feedback_text = "Extend arm fully to start"
+                if angle <= 150:
+                    feedback_text = "Extend arm fully to start"
+                else:
+                    feedback_text = "Show full body for counting"
             return angle, elbow, feedback_text, body_angle
 
-        # 3. Form Error Detection (Strict Geometric)
-        # Elbow Drifting Forward
-        if abs(elbow[0] - shoulder[0]) > 0.12: 
-            feedback_text = "⚠ ELBOW DRIFT"
-            self.speak_async("Bring your elbow back to your side.", priority=True)
-            self.current_rep_valid = False
-        
-        # Shoulder Shrugging
-        elif abs(shoulder[1] - ear[1]) < 0.10: 
-            feedback_text = "⚠ SHRUGGING"
-            self.speak_async("Relax your shoulders down.", priority=True)
+        # 3. Form Error Detection (Relaxed for beginners; require sustained frames)
+        # Thresholds are intentionally looser and we require the issue to persist
+        # for several frames before giving corrective feedback.
+        elbow_drift_threshold = 0.20
+        shrug_threshold = 0.06
+        lean_threshold = 0.22
+
+        # Elbow drifting: increment counter while condition holds, else reset
+        if abs(elbow[0] - shoulder[0]) > elbow_drift_threshold:
+            self.elbow_drift_frames += 1
+        else:
+            self.elbow_drift_frames = 0
+
+        if self.elbow_drift_frames >= self.error_frame_threshold:
+            feedback_text = "⚠ ELBOW OUT"
+            if time.time() - self.last_corrective_feedback_time > 1.5:
+                self.speak_async("Try keeping your elbow closer to your side.", priority=False)
+                self.last_corrective_feedback_time = time.time()
             self.current_rep_valid = False
 
-        # Leaning Backward
-        elif abs(shoulder[0] - hip[0]) > 0.15:
-            feedback_text = "⚠ LEANING"
-            self.speak_async("Stand tall. Keep your torso still.", priority=True)
+        # Shoulder shrugging
+        if abs(shoulder[1] - ear[1]) < shrug_threshold:
+            self.shrug_frames += 1
+        else:
+            self.shrug_frames = 0
+
+        if self.shrug_frames >= self.error_frame_threshold:
+            if not feedback_text:
+                feedback_text = "⚠ SHRUG"
+            if time.time() - self.last_corrective_feedback_time > 1.5:
+                self.speak_async("Relax your shoulders and lower them gently.", priority=False)
+                self.last_corrective_feedback_time = time.time()
             self.current_rep_valid = False
 
-        # 4. Movement & Pacing
+        # Leaning backward (allow more tolerance)
+        if abs(shoulder[0] - hip[0]) > lean_threshold:
+            self.lean_frames += 1
+        else:
+            self.lean_frames = 0
+
+        if self.lean_frames >= self.error_frame_threshold:
+            if not feedback_text:
+                feedback_text = "⚠ LEAN"
+            if time.time() - self.last_corrective_feedback_time > 1.5:
+                self.speak_async("Keep your torso upright; small adjustments are fine.", priority=False)
+                self.last_corrective_feedback_time = time.time()
+            self.current_rep_valid = False
+
+        # 4. Movement: simplified pacing for beginners
+        # Keep stages but remove fast-paced countdowns; at the top prompt
+        # users to lower slowly to avoid rushing the rep.
         if self.stage == "up":
-            # Pacing "One... Two... Three..."
-            if angle < 120 and self.pacing_state == 1:
-                self.speak_async("Two...")
-                self.pacing_state = 2
-            elif angle < 80 and self.pacing_state == 2:
-                self.speak_async("Three...")
-                self.pacing_state = 3
-            
-            # Top
+            # Top of curl reached
             if angle < 35:
                 self.stage = "peak"
-                self.speak_async("Pause. Lower slowly.", priority=True)
-                self.pacing_state = 0
+                self.speak_async("Lower slowly.", priority=True)
 
         elif self.stage == "peak":
+            # After holding top, user starts lowering
             if angle > 45:
                 self.stage = "down"
-                self.speak_async("One...")
-                self.pacing_state = 1
 
         elif self.stage == "down":
-            if angle > 80 and self.pacing_state == 1:
-                self.speak_async("Two...")
-                self.pacing_state = 2
-            elif angle > 120 and self.pacing_state == 2:
-                self.speak_async("Three...")
-                self.pacing_state = 3
-            
-            # Rep Complete
+            # Rep Complete when arm fully extended again
             if angle > 160:
                 if self.current_rep_valid:
-                    self.counter += 1
-                    feedback_text = "✓ GOOD REP"
-                    self.speak_async(f"Repetition {self.counter}.", priority=True)
+                    if self.check_full_body_visibility(landmarks):
+                        self.counter += 1
+                        feedback_text = "✓ GOOD REP"
+                        self.speak_async(f"Rep {self.counter}.", priority=True)
+                        # track consecutive good reps and encourage every 5
+                        self.consecutive_good_reps += 1
+                        if self.consecutive_good_reps > 0 and self.consecutive_good_reps % 5 == 0:
+                            self.speak_async("You are going good", priority=False)
+                        # reset bad-rep streak
+                        self.consecutive_bad_reps = 0
+                    else:
+                        feedback_text = "Show full body to count rep"
                 else:
                     self.consecutive_bad_reps += 1
                     feedback_text = "✗ FIX FORM"
-                
+                    # reset good-rep streak
+                    self.consecutive_good_reps = 0
+
                 self.stage = "up"
-                self.pacing_state = 1
                 self.current_rep_valid = True # Reset for next rep
 
         return angle, elbow, feedback_text, body_angle
@@ -377,55 +428,63 @@ class AI_Gym_Trainer:
                 feedback_text = "Stand straight to start"
             return angle, knee, feedback_text, body_angle
 
-        # Error: Knees Caving In
+        # Error detection (relaxed + debounced for beginners)
         knee_dist = abs(knee[0] - r_knee[0])
         hip_dist = abs(hip[0] - r_hip[0])
-        if self.stage == "down" and knee_dist < (hip_dist * 0.75):
-            feedback_text = "⚠ KNEES INWARD"
-            self.speak_async("Push knees outward.", priority=True)
-            self.current_rep_valid = False
-
-        # Error: Leaning Forward
-        elif abs(shoulder[0] - hip[0]) > 0.3:
-            feedback_text = "⚠ LEANING FORWARD"
-            self.speak_async("Lift your chest.", priority=True)
-            self.current_rep_valid = False
-
+        knee_inward_factor = 0.50  # allow moderate inward movement before flagging
         if self.stage == "down":
-            if angle < 160 and self.pacing_state == 1:
-                self.speak_async("One...")
-                self.pacing_state = 2
-            elif angle < 140 and self.pacing_state == 2:
-                self.speak_async("Two...")
-                self.pacing_state = 3
-            elif angle < 120 and self.pacing_state == 3:
-                self.speak_async("Three...")
-                self.pacing_state = 4
-                
+            if knee_dist < (hip_dist * knee_inward_factor):
+                self.knee_inward_frames += 1
+            else:
+                self.knee_inward_frames = 0
+
+            if self.knee_inward_frames >= self.error_frame_threshold:
+                feedback_text = "⚠ KNEES INWARD"
+                if time.time() - self.last_corrective_feedback_time > 1.5:
+                    self.speak_async("Push knees outward.", priority=False)
+                    self.last_corrective_feedback_time = time.time()
+                self.current_rep_valid = False
+
+        # Leaning Forward (debounced)
+        lean_threshold = 0.38
+        if abs(shoulder[0] - hip[0]) > lean_threshold:
+            self.lean_forward_frames += 1
+        else:
+            self.lean_forward_frames = 0
+
+        if self.lean_forward_frames >= self.error_frame_threshold:
+            if not feedback_text:
+                feedback_text = "⚠ LEANING FORWARD"
+            if time.time() - self.last_corrective_feedback_time > 1.5:
+                self.speak_async("Lift your chest slightly.", priority=False)
+                self.last_corrective_feedback_time = time.time()
+            self.current_rep_valid = False
+
+        # Movement: simplified pacing for beginners
+        if self.stage == "down":
+            # Bottom reached
             if angle < 90:
                 self.stage = "up"
-                self.speak_async("Pause. Up.", priority=True)
-                self.pacing_state = 1
+                self.speak_async("Stand up slowly.", priority=True)
 
         elif self.stage == "up":
-            if angle > 100 and self.pacing_state == 1:
-                self.speak_async("One...")
-                self.pacing_state = 2
-            elif angle > 140 and self.pacing_state == 2:
-                self.speak_async("Two...")
-                self.pacing_state = 3
-
+            # Rep complete when fully standing
             if angle > 165:
                 if self.current_rep_valid:
                     self.counter += 1
                     feedback_text = "✓ GOOD SQUAT"
-                    self.speak_async(f"Repetition {self.counter}.", priority=True)
+                    self.speak_async(f"Rep {self.counter}.", priority=True)
+                    # encouragement every 5 good reps
+                    self.consecutive_good_reps += 1
+                    if self.consecutive_good_reps % 5 == 0:
+                        self.speak_async("You are going good", priority=False)
+                    self.consecutive_bad_reps = 0
                 else:
                     self.consecutive_bad_reps += 1
                     feedback_text = "✗ FIX FORM"
-                
+                    self.consecutive_good_reps = 0
+
                 self.stage = "down"
-                self.pacing_state = 1
                 self.current_rep_valid = True
 
         return angle, knee, feedback_text, body_angle
@@ -450,49 +509,57 @@ class AI_Gym_Trainer:
                 feedback_text = "Arms at sides"
             return angle, shoulder, feedback_text, body_angle
 
-        # Error: Too High
-        if angle > 95:
+        # Relaxed, debounced checks for lift
+        too_high_threshold = 100
+        shrug_threshold = 0.06
+
+        if angle > too_high_threshold:
+            self.lift_too_high_frames += 1
+        else:
+            self.lift_too_high_frames = 0
+
+        if self.lift_too_high_frames >= self.error_frame_threshold:
             feedback_text = "⚠ TOO HIGH"
-            self.speak_async("Stop at shoulder height.", priority=True)
-            self.current_rep_valid = False
-        # Error: Shrugging
-        elif abs(shoulder[1] - ear[1]) < 0.10:
-            feedback_text = "⚠ SHRUGGING"
-            self.speak_async("Relax shoulders.", priority=True)
+            if time.time() - self.last_corrective_feedback_time > 1.5:
+                self.speak_async("Stop at shoulder height.", priority=False)
+                self.last_corrective_feedback_time = time.time()
             self.current_rep_valid = False
 
+        if abs(shoulder[1] - ear[1]) < shrug_threshold:
+            self.lift_shrug_frames += 1
+        else:
+            self.lift_shrug_frames = 0
+
+        if self.lift_shrug_frames >= self.error_frame_threshold:
+            if not feedback_text:
+                feedback_text = "⚠ SHRUG"
+            if time.time() - self.last_corrective_feedback_time > 1.5:
+                self.speak_async("Relax your shoulders.", priority=False)
+                self.last_corrective_feedback_time = time.time()
+            self.current_rep_valid = False
+
+        # Movement: simplified pacing for beginners
         if self.stage == "up":
-            if angle > 30 and self.pacing_state == 1:
-                self.speak_async("Two...")
-                self.pacing_state = 2
-            elif angle > 60 and self.pacing_state == 2:
-                self.speak_async("Three...")
-                self.pacing_state = 3
-            
             if angle > 80:
                 self.stage = "down"
-                self.speak_async("Pause. Lower.", priority=True)
-                self.pacing_state = 1
+                self.speak_async("Lower slowly.", priority=True)
 
         elif self.stage == "down":
-            if angle < 60 and self.pacing_state == 1:
-                self.speak_async("One...")
-                self.pacing_state = 2
-            elif angle < 30 and self.pacing_state == 2:
-                self.speak_async("Two...")
-                self.pacing_state = 3
-            
             if angle < 15:
                 if self.current_rep_valid:
                     self.counter += 1
                     feedback_text = "✓ GOOD REP"
-                    self.speak_async(f"Repetition {self.counter}.", priority=True)
+                    self.speak_async(f"Rep {self.counter}.", priority=True)
+                    self.consecutive_good_reps += 1
+                    if self.consecutive_good_reps % 5 == 0:
+                        self.speak_async("You are going good", priority=False)
+                    self.consecutive_bad_reps = 0
                 else:
                     self.consecutive_bad_reps += 1
                     feedback_text = "✗ FIX FORM"
-                
+                    self.consecutive_good_reps = 0
+
                 self.stage = "up"
-                self.pacing_state = 1
                 self.current_rep_valid = True
 
         return angle, shoulder, feedback_text, body_angle
